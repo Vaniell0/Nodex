@@ -88,7 +88,9 @@ fwui-native (fwui-native/) — BSL 1.1
 ├── Render cache (@_html_cache, O(1))
 ├── Inja Template Engine (Jinja2-совместимый)
 ├── Baked templates (статические чанки + слоты)
-└── PackedBuilder (opcode stream → C → HTML)
+├── PackedBuilder (opcode stream → C → HTML)
+├── UI::Component (упрощённый API поверх baked)
+└── Thread Safety (per-thread буферы, mutex)
 
 C++ ядро (include/, src/) — BSL 1.1
 ├── Node, Elements, Decorators, Renderer

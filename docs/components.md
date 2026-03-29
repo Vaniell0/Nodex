@@ -111,6 +111,18 @@ registry.component_names  # => ["navbar", "header", "about", ...]
 registry.has_page?("/")   # => true
 ```
 
+## UI::Component (v1.1)
+
+Упрощённый API поверх baked templates:
+
+```ruby
+FWUI::UI::Component.bake(:card) { [FWUI.h1(FWUI.slot(:title)), FWUI.p(FWUI.slot(:body))] }
+FWUI::UI::Component.render(:card, title: "Hello", body: "World")
+FWUI::UI::Component.node(:card, title: "Hello", body: "World")  # → FWUI::Node
+```
+
+`bake` принимает блок, возвращающий массив Node. `render` возвращает HTML-строку. `node` возвращает `FWUI::Node` (через `FWUI.raw`), который можно встраивать в дерево.
+
 ## Hot-Reload
 
 В dev mode при изменении `.rb` файла:

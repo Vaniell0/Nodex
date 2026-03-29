@@ -247,6 +247,17 @@ node.color("red").padding("10px").font_size("2em")
 # но один сброс кеша вместо трёх
 ```
 
+## Thread Safety (v1.1)
+
+C extension безопасен для многопоточного использования (Puma, Sidekiq):
+
+- **Буферы рендеринга** — per-thread (`__thread`), каждый поток имеет свой буфер
+- **Opcode stack** — локальный на вызов, не разделяется между потоками
+- **Baked registry** — `pthread_mutex` при регистрации, lock-free при рендере
+- **Inja template_dir** — `std::shared_mutex` (shared read, exclusive write)
+
+Безопасно вызывать `to_html`, `render_baked`, `build`, `render_template` из любого потока.
+
 ## Установка
 
 ```bash
