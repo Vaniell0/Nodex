@@ -63,6 +63,7 @@ page = layout("My Site",
 ### C++ ядро (BSL 1.1)
 
 - [cpp-api](cpp-api.md) — Node, Elements, Decorators, Renderer, Registry, TemplateEngine
+- [pdf](pdf.md) — PDF рендерер: Node tree → PDF через libharu
 - [ssg](ssg.md) — генератор статических сайтов (`fwui-ssg`)
 - [embedded](embedded.md) — embedded pages: constexpr HTML в бинарнике (`fwui-embed`)
 - [build](build.md) — CMake, таргеты, зависимости, CI
@@ -96,6 +97,7 @@ C++ ядро (include/, src/) — BSL 1.1
 ├── Node, Elements, Decorators, Renderer
 ├── Registry (компоненты + страницы)
 ├── Inja Template Engine
+├── PdfRenderer (Node tree → PDF via libharu)
 └── SSG + Embed генераторы
 ```
 

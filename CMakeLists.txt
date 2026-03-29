@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(FWUI_BUILD_TESTS "Build unit tests" OFF)
+option(FWUI_BUILD_PDF   "Build PDF renderer (requires libharu)" ON)
 
 # --- Dependencies (find_package first, FetchContent fallback for Windows) ---
 include(FetchContent)
@@ -40,6 +41,17 @@ FetchContent_Declare(inja
 FetchContent_Populate(inja)
 set(INJA_INCLUDE_DIR ${inja_SOURCE_DIR}/include)
 
+# libharu (PDF generation)
+if(FWUI_BUILD_PDF)
+  FetchContent_Declare(libharu
+    GIT_REPOSITORY https://github.com/libharu/libharu.git
+    GIT_TAG        v2.4.4
+  )
+  set(LIBHPDF_SHARED OFF CACHE BOOL "" FORCE)
+  set(LIBHPDF_STATIC ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(libharu)
+endif()
+
 # --- Core static library ---
 add_library(fwui STATIC
     src/core.cpp
@@ -65,6 +77,21 @@ target_link_libraries(fwui PUBLIC
     nlohmann_json::nlohmann_json
 )
 
+# --- PDF renderer (optional) ---
+if(FWUI_BUILD_PDF)
+  target_sources(fwui PRIVATE
+    src/pdf_renderer.cpp
+    src/pdf_fonts.cpp
+    src/pdf_layout.cpp
+  )
+  target_include_directories(fwui PRIVATE
+    ${libharu_SOURCE_DIR}/include
+    ${libharu_BINARY_DIR}/include
+  )
+  target_link_libraries(fwui PUBLIC hpdf)
+  target_compile_definitions(fwui PUBLIC FWUI_HAS_PDF=1)
+endif()
+
 # --- Demo executable ---
 add_executable(fwui-demo src/main.cpp)
 target_link_libraries(fwui-demo PRIVATE fwui)
@@ -84,6 +111,12 @@ target_link_libraries(fwui-ssg PRIVATE fwui)
 # --- Embed generator (pages -> constexpr C++ source) ---
 add_executable(fwui-embed src/embed_gen.cpp src/pages/ssg_pages.cpp)
 target_link_libraries(fwui-embed PRIVATE fwui)
+
+# --- PDF CLI ---
+if(FWUI_BUILD_PDF)
+  add_executable(fwui-pdf src/pdf_cli.cpp)
+  target_link_libraries(fwui-pdf PRIVATE fwui)
+endif()
 
 # --- Install ---
 install(TARGETS fwui
@@ -112,6 +145,10 @@ if(FWUI_BUILD_TESTS)
     tests/test_registry.cpp
     tests/test_template_engine.cpp
   )
+  if(FWUI_BUILD_PDF)
+    target_sources(fwui-tests PRIVATE tests/test_pdf_renderer.cpp)
+  endif()
+
   target_link_libraries(fwui-tests PRIVATE fwui Catch2::Catch2WithMain)
 
   include(CTest)

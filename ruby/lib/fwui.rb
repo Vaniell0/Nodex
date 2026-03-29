@@ -12,6 +12,7 @@
 #   puts page.to_html
 
 require 'json'
+require 'open3'
 require 'set'
 require_relative 'fwui/version'
 require_relative 'fwui/platform'
@@ -156,6 +157,33 @@ module FWUI
     end
 
     def to_json(indent: 2) = JSON.pretty_generate(to_hash, indent: ' ' * indent)
+
+    # Render this node tree to PDF via the fwui-pdf CLI.
+    # Returns PDF data as a binary string, or writes to output_path if given.
+    #
+    #   node.to_pdf                              # => "\x25PDF-..."
+    #   node.to_pdf("report.pdf")                # writes file, returns bytes written
+    #   node.to_pdf(title: "Report", page_numbers: true)
+    def to_pdf(output_path = nil, title: nil, author: nil, page_size: nil,
+               page_numbers: false, font_size: nil, margins: nil)
+      json_str = to_json
+      args = ['fwui-pdf', '-i', '-', '-o', '-']
+      args += ['--title', title]       if title
+      args += ['--author', author]     if author
+      args += ['--page-size', page_size] if page_size
+      args += ['--font-size', font_size.to_s] if font_size
+      args += ['--margins', margins]   if margins
+      args += ['--page-numbers']       if page_numbers
+
+      pdf_data, status = Open3.capture2(*args, stdin_data: json_str, binmode: true)
+      raise "fwui-pdf failed (exit #{status.exitstatus})" unless status.success?
+
+      if output_path
+        File.binwrite(output_path, pdf_data)
+      else
+        pdf_data
+      end
+    end
 
     def to_hash
       # Handle special Ruby-only node types for C++ compatibility

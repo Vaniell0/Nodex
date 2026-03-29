@@ -32,11 +32,11 @@ jobs:
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFWUI_BUILD_TESTS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFWUI_BUILD_TESTS=ON -DFWUI_BUILD_PDF=ON
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        run: cmake -B build -DFWUI_BUILD_TESTS=ON
+        run: cmake -B build -DFWUI_BUILD_TESTS=ON -DFWUI_BUILD_PDF=ON
 
       - name: Build
         run: cmake --build build --config Release
