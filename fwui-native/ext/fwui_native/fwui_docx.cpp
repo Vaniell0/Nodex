@@ -388,6 +388,83 @@ static int css_to_half_pt(const std::string &val) {
     return static_cast<int>(num * 2);
 }
 
+/* ── Border parsing ────────────────────────────────────────────── */
+
+struct BorderInfo {
+    int size_eighths = 0; /* w:sz in 1/8 pt */
+    std::string color;    /* RRGGBB or "auto" */
+    std::string style;    /* "single", "double", "dashed", "dotted" */
+};
+
+/* Parse CSS border shorthand: "1px solid #333" */
+static BorderInfo parse_border(const std::string &val) {
+    BorderInfo b;
+    if (val.empty() || val == "none" || val == "0") return b;
+
+    /* Extract width */
+    int tw = css_to_twips(val);
+    b.size_eighths = std::max(tw / 3, 2); /* rough mapping to 1/8 pt */
+
+    /* Extract style */
+    if (val.find("dashed") != std::string::npos) b.style = "dashed";
+    else if (val.find("dotted") != std::string::npos) b.style = "dotted";
+    else if (val.find("double") != std::string::npos) b.style = "double";
+    else b.style = "single";
+
+    /* Extract color — look for #RRGGBB or color name */
+    auto hash_pos = val.find('#');
+    if (hash_pos != std::string::npos) {
+        std::string rest = val.substr(hash_pos);
+        /* isolate the hex portion */
+        size_t end = rest.find_first_of(" \t;", 1);
+        std::string hex = rest.substr(0, end);
+        b.color = parse_color_to_hex6(hex);
+    }
+    if (b.color.empty()) b.color = "auto";
+    return b;
+}
+
+/* ── Page configuration ────────────────────────────────────────── */
+
+struct PageConfig {
+    int width_twips  = 12240; /* 8.5 in (Letter) */
+    int height_twips = 15840; /* 11 in (Letter) */
+    int margin_top    = 1440; /* 1 in */
+    int margin_bottom = 1440;
+    int margin_left   = 1440;
+    int margin_right  = 1440;
+};
+
+static PageConfig parse_page_config(VALUE opts) {
+    PageConfig pc;
+    if (NIL_P(opts) || !RB_TYPE_P(opts, T_HASH)) return pc;
+
+    VALUE v;
+    v = rb_hash_aref(opts, rb_str_new_cstr("page_width"));
+    if (!NIL_P(v)) pc.width_twips = css_to_twips(rb_str_to_std(v));
+    v = rb_hash_aref(opts, rb_str_new_cstr("page_height"));
+    if (!NIL_P(v)) pc.height_twips = css_to_twips(rb_str_to_std(v));
+    v = rb_hash_aref(opts, rb_str_new_cstr("margin_top"));
+    if (!NIL_P(v)) pc.margin_top = css_to_twips(rb_str_to_std(v));
+    v = rb_hash_aref(opts, rb_str_new_cstr("margin_bottom"));
+    if (!NIL_P(v)) pc.margin_bottom = css_to_twips(rb_str_to_std(v));
+    v = rb_hash_aref(opts, rb_str_new_cstr("margin_left"));
+    if (!NIL_P(v)) pc.margin_left = css_to_twips(rb_str_to_std(v));
+    v = rb_hash_aref(opts, rb_str_new_cstr("margin_right"));
+    if (!NIL_P(v)) pc.margin_right = css_to_twips(rb_str_to_std(v));
+
+    /* Presets */
+    v = rb_hash_aref(opts, rb_str_new_cstr("page_size"));
+    if (RB_TYPE_P(v, T_STRING)) {
+        std::string size = rb_str_to_std(v);
+        if (size == "A4") { pc.width_twips = 11906; pc.height_twips = 16838; }
+        else if (size == "A3") { pc.width_twips = 16838; pc.height_twips = 23811; }
+        else if (size == "Legal") { pc.width_twips = 12240; pc.height_twips = 20160; }
+    }
+
+    return pc;
+}
+
 /* ── Tag classification ────────────────────────────────────────── */
 
 static bool is_heading(const std::string &tag) {
@@ -396,15 +473,6 @@ static bool is_heading(const std::string &tag) {
 
 static int heading_level(const std::string &tag) {
     return tag[1] - '0';
-}
-
-static bool is_block(const std::string &tag) {
-    static const std::unordered_set<std::string> blocks = {
-        "div","section","article","main","aside","header","footer","nav",
-        "p","h1","h2","h3","h4","h5","h6","pre","blockquote","figure",
-        "figcaption","details","summary","address"
-    };
-    return blocks.count(tag) > 0;
 }
 
 static bool is_container(const std::string &tag) {
@@ -459,6 +527,7 @@ struct ParaProps {
     std::string indent_left;     /* twips */
     std::string indent_right;    /* twips */
     int heading_level = 0;       /* 1-6 or 0 */
+    BorderInfo border;           /* uniform border from CSS `border` */
 };
 
 class DocxRenderer {
@@ -480,13 +549,16 @@ class DocxRenderer {
     /* Track state for inline content */
     bool in_paragraph_ = false;
 
+    PageConfig page_config_;
+
     std::string next_rel_id() {
         return "rId" + std::to_string(rel_id_++);
     }
 
 public:
-    std::string render(VALUE root) {
+    std::string render(VALUE root, VALUE opts = Qnil) {
         rel_id_ = 10; /* reserve low IDs for standard rels */
+        page_config_ = parse_page_config(opts);
         walk(root, RunProps{}, ParaProps{});
 
         ZipWriter zip;
@@ -543,10 +615,22 @@ private:
         bool has_props = pp.heading_level > 0 || !pp.alignment.empty() ||
                          !pp.spacing_before.empty() || !pp.spacing_after.empty() ||
                          !pp.line_spacing.empty() || !pp.indent_left.empty() ||
-                         !pp.indent_right.empty() || list_num_id > 0;
+                         !pp.indent_right.empty() || list_num_id > 0 ||
+                         pp.border.size_eighths > 0;
         if (!has_props) return;
 
         w.open("w:pPr");
+        if (pp.border.size_eighths > 0) {
+            w.open("w:pBdr");
+            const char *sides[] = {"w:top","w:left","w:bottom","w:right"};
+            for (auto s : sides) {
+                w.open_attr(s).attr("w:val", pp.border.style)
+                 .attr("w:sz", pp.border.size_eighths)
+                 .attr("w:space", 1)
+                 .attr("w:color", pp.border.color).self_close();
+            }
+            w.close("w:pBdr");
+        }
         if (list_num_id > 0) {
             w.open("w:numPr");
             w.open_attr("w:ilvl").attr("w:val", list_level >= 0 ? list_level : 0).self_close();
@@ -671,21 +755,48 @@ private:
 
         /* Cell properties */
         body_.open("w:tcPr");
-        body_.open_attr("w:tcBorders").end_open();
-        const char *border_types[] = {"w:top","w:left","w:bottom","w:right"};
-        for (auto bt : border_types) {
-            body_.open_attr(bt).attr("w:val","single").attr("w:sz",4)
-                 .attr("w:space",0).attr("w:color","auto").self_close();
-        }
-        body_.close("w:tcBorders");
 
-        /* Width from style */
+        /* Width */
         std::string width = get_style(cell_d.styles, "width");
         if (!width.empty()) {
             int tw = css_to_twips(width);
             if (tw > 0)
                 body_.open_attr("w:tcW").attr("w:w",tw).attr("w:type","dxa").self_close();
         }
+
+        /* Colspan → gridSpan */
+        std::string colspan = get_attr(cell_d.attrs, "colspan");
+        if (!colspan.empty()) {
+            int span = 1;
+            try { span = std::stoi(colspan); } catch (...) {}
+            if (span > 1)
+                body_.open_attr("w:gridSpan").attr("w:val", span).self_close();
+        }
+
+        /* Rowspan → vMerge (start cell = restart, continuation cells handled by caller) */
+        std::string rowspan = get_attr(cell_d.attrs, "rowspan");
+        if (!rowspan.empty()) {
+            int span = 1;
+            try { span = std::stoi(rowspan); } catch (...) {}
+            if (span > 1)
+                body_.open_attr("w:vMerge").attr("w:val", "restart").self_close();
+        }
+
+        /* Cell borders */
+        BorderInfo cell_border = parse_border(get_style(cell_d.styles, "border"));
+        body_.open_attr("w:tcBorders").end_open();
+        const char *border_types[] = {"w:top","w:left","w:bottom","w:right"};
+        for (auto bt : border_types) {
+            if (cell_border.size_eighths > 0) {
+                body_.open_attr(bt).attr("w:val", cell_border.style)
+                     .attr("w:sz", cell_border.size_eighths)
+                     .attr("w:space",0).attr("w:color", cell_border.color).self_close();
+            } else {
+                body_.open_attr(bt).attr("w:val","single").attr("w:sz",4)
+                     .attr("w:space",0).attr("w:color","auto").self_close();
+            }
+        }
+        body_.close("w:tcBorders");
 
         body_.close("w:tcPr");
 
@@ -900,6 +1011,10 @@ private:
         /* Line height */
         std::string lh = get_style(styles, "line-height");
         if (!lh.empty()) pp.line_spacing = std::to_string(css_to_twips(lh));
+
+        /* Border */
+        std::string b = get_style(styles, "border");
+        if (!b.empty()) pp.border = parse_border(b);
 
         return pp;
     }
@@ -1238,6 +1353,21 @@ private:
          .end_open();
         w.open("w:body");
         w.raw(body_.str());
+
+        /* Section properties — page size and margins */
+        w.open("w:sectPr");
+        w.open_attr("w:pgSz")
+         .attr("w:w", page_config_.width_twips)
+         .attr("w:h", page_config_.height_twips)
+         .self_close();
+        w.open_attr("w:pgMar")
+         .attr("w:top", page_config_.margin_top)
+         .attr("w:bottom", page_config_.margin_bottom)
+         .attr("w:left", page_config_.margin_left)
+         .attr("w:right", page_config_.margin_right)
+         .self_close();
+        w.close("w:sectPr");
+
         w.close("w:body");
         w.close("w:document");
         return w.str();
@@ -1316,12 +1446,797 @@ private:
 };
 
 /* ══════════════════════════════════════════════════════════════════
- *  Ruby binding: render_docx(node) → String
+ *  ODT Renderer
  * ══════════════════════════════════════════════════════════════════ */
 
-static VALUE native_render_docx(VALUE mod, VALUE node) {
+class OdtRenderer {
+    XmlWriter body_;
+    int style_id_ = 1;
+    int image_id_ = 1;
+
+    /* Automatic styles collected during walk (two-pass: walk then emit) */
+    struct AutoStyle {
+        std::string name;
+        std::string family; /* "paragraph" or "text" */
+        /* text props */
+        bool bold = false, italic = false, underline = false, strike = false, monospace = false;
+        std::string color, bg_color, font_size, font_family, letter_spacing;
+        /* paragraph props */
+        std::string alignment;
+        std::string margin_top, margin_bottom, margin_left, margin_right;
+        std::string line_height;
+        int heading_level = 0;
+    };
+    std::vector<AutoStyle> auto_styles_;
+
+    /* List tracking */
+    struct OdtListCtx { bool ordered; int depth; };
+    std::vector<OdtListCtx> list_stack_;
+
+    /* Images */
+    std::vector<std::pair<std::string, std::string>> images_; /* zip_path, data */
+
+    bool in_paragraph_ = false;
+    std::string current_para_style_;
+    PageConfig page_config_;
+
+    std::string make_style_name(const char *prefix) {
+        return std::string(prefix) + std::to_string(style_id_++);
+    }
+
+public:
+    std::string render(VALUE root, VALUE opts = Qnil) {
+        page_config_ = parse_page_config(opts);
+        walk(root, RunProps{});
+
+        ZipWriter zip;
+        zip.add("mimetype", "application/vnd.oasis.opendocument.text");
+        zip.add("META-INF/manifest.xml", manifest_xml());
+        zip.add("content.xml", content_xml());
+        zip.add("styles.xml", odt_styles_xml());
+
+        for (auto &img : images_)
+            zip.add(img.first, img.second);
+
+        return zip.finish();
+    }
+
+private:
+    /* ── Text style → ODF properties ─────────────────────────── */
+
+    void write_text_props(XmlWriter &w, const RunProps &rp) {
+        bool has = rp.bold || rp.italic || rp.underline || rp.strike ||
+                   rp.monospace || !rp.color.empty() || !rp.bg_color.empty() ||
+                   !rp.font_size.empty() || !rp.font_family.empty() ||
+                   !rp.letter_spacing.empty();
+        if (!has) return;
+
+        w.open_attr("style:text-properties");
+        if (rp.bold) w.attr("fo:font-weight", "bold");
+        if (rp.italic) w.attr("fo:font-style", "italic");
+        if (rp.underline) {
+            w.attr("style:text-underline-style", "solid");
+            w.attr("style:text-underline-width", "auto");
+        }
+        if (rp.strike) w.attr("style:text-line-through-style", "solid");
+        if (rp.monospace || !rp.font_family.empty()) {
+            std::string font = rp.font_family.empty() ? "Courier New" : rp.font_family;
+            w.attr("style:font-name", font);
+        }
+        if (!rp.color.empty()) w.attr("fo:color", "#" + rp.color);
+        if (!rp.bg_color.empty()) w.attr("fo:background-color", "#" + rp.bg_color);
+        if (!rp.font_size.empty()) {
+            /* font_size is in half-points, convert to pt */
+            int hp = 0;
+            try { hp = std::stoi(rp.font_size); } catch (...) {}
+            if (hp > 0) {
+                std::string pt = std::to_string(hp / 2) + "pt";
+                w.attr("fo:font-size", pt);
+            }
+        }
+        if (!rp.letter_spacing.empty()) {
+            int tw = 0;
+            try { tw = std::stoi(rp.letter_spacing); } catch (...) {}
+            /* twips to cm: 1 twip = 1/1440 inch, 1 inch = 2.54 cm */
+            double cm = tw / 1440.0 * 2.54;
+            std::ostringstream oss;
+            oss << cm << "cm";
+            w.attr("fo:letter-spacing", oss.str());
+        }
+        w.self_close();
+    }
+
+    bool rp_has_format(const RunProps &rp) {
+        return rp.bold || rp.italic || rp.underline || rp.strike ||
+               rp.monospace || !rp.color.empty() || !rp.bg_color.empty() ||
+               !rp.font_size.empty() || !rp.font_family.empty() ||
+               !rp.letter_spacing.empty();
+    }
+
+    /* ── Emit text span ───────────────────────────────────────── */
+
+    void emit_span(const std::string &text, const RunProps &rp) {
+        if (rp_has_format(rp)) {
+            std::string sn = make_style_name("T");
+            AutoStyle as;
+            as.name = sn;
+            as.family = "text";
+            as.bold = rp.bold; as.italic = rp.italic;
+            as.underline = rp.underline; as.strike = rp.strike;
+            as.monospace = rp.monospace;
+            as.color = rp.color; as.bg_color = rp.bg_color;
+            as.font_size = rp.font_size; as.font_family = rp.font_family;
+            as.letter_spacing = rp.letter_spacing;
+            auto_styles_.push_back(std::move(as));
+
+            body_.open_attr("text:span").attr("text:style-name", sn).end_open();
+            body_.text(text);
+            body_.close("text:span");
+        } else {
+            body_.text(text);
+        }
+    }
+
+    /* ── Paragraph management ─────────────────────────────────── */
+
+    void open_paragraph(const std::string &style = {}, int heading_level = 0) {
+        if (in_paragraph_) close_paragraph();
+        if (heading_level > 0) {
+            body_.open_attr("text:h")
+                 .attr("text:outline-level", heading_level);
+            if (!style.empty()) body_.attr("text:style-name", style);
+            body_.end_open();
+        } else {
+            body_.open_attr("text:p");
+            if (!style.empty()) body_.attr("text:style-name", style);
+            body_.end_open();
+        }
+        in_paragraph_ = true;
+        current_para_style_ = style;
+    }
+
+    void ensure_paragraph(const std::string &style = {}, int heading_level = 0) {
+        if (!in_paragraph_)
+            open_paragraph(style, heading_level);
+    }
+
+    void close_paragraph(int heading_level = 0) {
+        if (in_paragraph_) {
+            if (heading_level > 0)
+                body_.close("text:h");
+            else
+                body_.close("text:p");
+            in_paragraph_ = false;
+        }
+    }
+
+    /* ── Make paragraph style ─────────────────────────────────── */
+
+    std::string make_para_style(VALUE styles, const std::string &tag) {
+        std::string align = get_style(styles, "text-align");
+        std::string mt = get_style(styles, "margin-top");
+        std::string mb = get_style(styles, "margin-bottom");
+        std::string ml = get_style(styles, "margin-left");
+        std::string mr = get_style(styles, "margin-right");
+        std::string m = get_style(styles, "margin");
+        std::string pl = get_style(styles, "padding-left");
+        std::string pr_s = get_style(styles, "padding-right");
+        std::string p = get_style(styles, "padding");
+        std::string lh = get_style(styles, "line-height");
+
+        bool has = !align.empty() || !mt.empty() || !mb.empty() || !ml.empty() ||
+                   !mr.empty() || !m.empty() || !pl.empty() || !pr_s.empty() ||
+                   !p.empty() || !lh.empty();
+        if (!has) return {};
+
+        std::string sn = make_style_name("P");
+        AutoStyle as;
+        as.name = sn;
+        as.family = "paragraph";
+        as.alignment = align;
+
+        /* margins — use specific or fallback to shorthand */
+        auto twips_to_cm = [](const std::string &v) -> std::string {
+            if (v.empty()) return {};
+            int tw = css_to_twips(v);
+            double cm = tw / 1440.0 * 2.54;
+            std::ostringstream oss;
+            oss << cm << "cm";
+            return oss.str();
+        };
+
+        as.margin_top = twips_to_cm(mt.empty() ? m : mt);
+        as.margin_bottom = twips_to_cm(mb.empty() ? m : mb);
+        as.margin_left = twips_to_cm(!ml.empty() ? ml : (!pl.empty() ? pl : (!p.empty() ? p : m)));
+        as.margin_right = twips_to_cm(!mr.empty() ? mr : (!pr_s.empty() ? pr_s : (!p.empty() ? p : m)));
+        as.line_height = lh;
+
+        auto_styles_.push_back(std::move(as));
+        return sn;
+    }
+
+    /* ── Main recursive walker ─────────────────────────────────── */
+
+    void walk(VALUE node, const RunProps &rp) {
+        NodeData d = read_node(node);
+
+        if (RTEST(d.raw_html)) return;
+
+        std::string tag = tag_str(d.tag);
+
+        /* Text node */
+        if (tag == ":text_node") {
+            if (RTEST(d.text)) {
+                ensure_paragraph();
+                emit_span(rb_str_to_std(d.text), rp);
+            }
+            return;
+        }
+
+        if (is_skip_tag(tag)) return;
+
+        RunProps child_rp = merge_run_props(rp, d.styles, tag);
+
+        /* ── br ───────────────────────────────────────────────── */
+        if (tag == "br") {
+            ensure_paragraph();
+            body_.raw("<text:line-break/>");
+            return;
+        }
+
+        /* ── hr ───────────────────────────────────────────────── */
+        if (tag == "hr") {
+            close_paragraph();
+            /* Create a paragraph style with bottom border */
+            std::string sn = make_style_name("P");
+            AutoStyle as;
+            as.name = sn;
+            as.family = "paragraph";
+            /* We'll handle hr via a dedicated empty paragraph; border via style */
+            auto_styles_.push_back(std::move(as));
+            body_.open_attr("text:p").attr("text:style-name", sn).end_open();
+            body_.close("text:p");
+            return;
+        }
+
+        /* ── Heading ──────────────────────────────────────────── */
+        if (is_heading(tag)) {
+            int level = heading_level(tag);
+            close_paragraph();
+            std::string sn = make_para_style(d.styles, tag);
+            open_paragraph(sn, level);
+
+            if (RTEST(d.text))
+                emit_span(rb_str_to_std(d.text), child_rp);
+            walk_children(d.children, child_rp);
+            close_paragraph(level);
+            return;
+        }
+
+        /* ── Paragraph / pre ──────────────────────────────────── */
+        if (tag == "p" || tag == "pre") {
+            close_paragraph();
+            std::string sn = make_para_style(d.styles, tag);
+            open_paragraph(sn);
+
+            if (RTEST(d.text))
+                emit_span(rb_str_to_std(d.text), child_rp);
+            walk_children(d.children, child_rp);
+            close_paragraph();
+            return;
+        }
+
+        /* ── Container ────────────────────────────────────────── */
+        if (is_container(tag)) {
+            close_paragraph();
+            if (RTEST(d.text)) {
+                std::string sn = make_para_style(d.styles, tag);
+                open_paragraph(sn);
+                emit_span(rb_str_to_std(d.text), child_rp);
+                close_paragraph();
+            }
+            walk_children(d.children, child_rp);
+            close_paragraph();
+            return;
+        }
+
+        /* ── Inline formatting ────────────────────────────────── */
+        if (is_inline_format(tag)) {
+            if (RTEST(d.text)) {
+                ensure_paragraph();
+                emit_span(rb_str_to_std(d.text), child_rp);
+            }
+            walk_children(d.children, child_rp);
+            return;
+        }
+
+        /* ── Lists ────────────────────────────────────────────── */
+        if (tag == "ul" || tag == "ol") {
+            close_paragraph();
+            bool ordered = (tag == "ol");
+            int depth = list_stack_.empty() ? 0 : list_stack_.back().depth + 1;
+            list_stack_.push_back({ordered, depth});
+
+            body_.open("text:list");
+            walk_children(d.children, child_rp);
+            body_.close("text:list");
+
+            list_stack_.pop_back();
+            return;
+        }
+
+        if (tag == "li") {
+            body_.open("text:list-item");
+            in_paragraph_ = false;
+
+            if (RTEST(d.text)) {
+                open_paragraph();
+                emit_span(rb_str_to_std(d.text), child_rp);
+            }
+
+            if (RB_TYPE_P(d.children, T_ARRAY)) {
+                long len = RARRAY_LEN(d.children);
+                for (long i = 0; i < len; i++) {
+                    VALUE child = RARRAY_AREF(d.children, i);
+                    NodeData cd = read_node(child);
+                    std::string ctag = tag_str(cd.tag);
+                    if (ctag == "ul" || ctag == "ol") {
+                        close_paragraph();
+                        walk(child, child_rp);
+                    } else {
+                        if (!in_paragraph_) open_paragraph();
+                        walk(child, child_rp);
+                    }
+                }
+            }
+
+            close_paragraph();
+            body_.close("text:list-item");
+            return;
+        }
+
+        /* ── Table ────────────────────────────────────────────── */
+        if (tag == "table") {
+            close_paragraph();
+            odt_walk_table(d, child_rp);
+            return;
+        }
+        if (tag == "thead" || tag == "tbody" || tag == "tfoot") {
+            walk_children(d.children, child_rp);
+            return;
+        }
+
+        /* ── Hyperlink ────────────────────────────────────────── */
+        if (tag == "a") {
+            std::string href = get_attr(d.attrs, "href");
+            ensure_paragraph();
+
+            if (!href.empty())
+                body_.open_attr("text:a").attr("xlink:href", href)
+                     .attr("xlink:type", "simple").end_open();
+
+            RunProps link_rp = child_rp;
+            if (link_rp.color.empty()) link_rp.color = "0563C1";
+            link_rp.underline = true;
+
+            if (RTEST(d.text))
+                emit_span(rb_str_to_std(d.text), link_rp);
+            walk_children(d.children, link_rp);
+
+            if (!href.empty())
+                body_.close("text:a");
+            return;
+        }
+
+        /* ── Image ────────────────────────────────────────────── */
+        if (tag == "img") {
+            std::string src = get_attr(d.attrs, "src");
+            if (src.empty()) return;
+            ensure_paragraph();
+            odt_emit_image(src, d.attrs);
+            return;
+        }
+
+        /* ── Fallback ─────────────────────────────────────────── */
+        if (RTEST(d.text)) {
+            ensure_paragraph();
+            emit_span(rb_str_to_std(d.text), child_rp);
+        }
+        walk_children(d.children, child_rp);
+    }
+
+    void walk_children(VALUE children, const RunProps &rp) {
+        if (!RB_TYPE_P(children, T_ARRAY)) return;
+        long len = RARRAY_LEN(children);
+        for (long i = 0; i < len; i++)
+            walk(RARRAY_AREF(children, i), rp);
+    }
+
+    /* ── Table rendering (ODF) ────────────────────────────────── */
+
+    void odt_walk_table(const NodeData &table_d, const RunProps &rp) {
+        body_.open("table:table");
+
+        if (RB_TYPE_P(table_d.children, T_ARRAY)) {
+            long len = RARRAY_LEN(table_d.children);
+            for (long i = 0; i < len; i++) {
+                VALUE child = RARRAY_AREF(table_d.children, i);
+                NodeData cd = read_node(child);
+                std::string ctag = tag_str(cd.tag);
+                if (ctag == "tr") {
+                    odt_walk_row(cd, rp);
+                } else if (ctag == "thead" || ctag == "tbody" || ctag == "tfoot") {
+                    if (RB_TYPE_P(cd.children, T_ARRAY)) {
+                        long clen = RARRAY_LEN(cd.children);
+                        for (long j = 0; j < clen; j++) {
+                            VALUE row = RARRAY_AREF(cd.children, j);
+                            NodeData rd = read_node(row);
+                            if (tag_str(rd.tag) == "tr")
+                                odt_walk_row(rd, rp);
+                        }
+                    }
+                }
+            }
+        }
+
+        body_.close("table:table");
+    }
+
+    void odt_walk_row(const NodeData &row_d, const RunProps &rp) {
+        body_.open("table:table-row");
+        if (RB_TYPE_P(row_d.children, T_ARRAY)) {
+            long len = RARRAY_LEN(row_d.children);
+            for (long i = 0; i < len; i++) {
+                VALUE child = RARRAY_AREF(row_d.children, i);
+                NodeData cd = read_node(child);
+                std::string ctag = tag_str(cd.tag);
+                if (ctag == "td" || ctag == "th")
+                    odt_walk_cell(cd, rp, ctag == "th");
+            }
+        }
+        body_.close("table:table-row");
+    }
+
+    void odt_walk_cell(const NodeData &cell_d, const RunProps &rp, bool is_header) {
+        body_.open_attr("table:table-cell");
+
+        /* Colspan / rowspan */
+        std::string colspan = get_attr(cell_d.attrs, "colspan");
+        if (!colspan.empty()) {
+            int span = 1;
+            try { span = std::stoi(colspan); } catch (...) {}
+            if (span > 1) body_.attr("table:number-columns-spanned", span);
+        }
+        std::string rowspan = get_attr(cell_d.attrs, "rowspan");
+        if (!rowspan.empty()) {
+            int span = 1;
+            try { span = std::stoi(rowspan); } catch (...) {}
+            if (span > 1) body_.attr("table:number-rows-spanned", span);
+        }
+        body_.end_open();
+
+        RunProps cell_rp = merge_run_props(rp, cell_d.styles, is_header ? "th" : "td");
+        if (is_header) cell_rp.bold = true;
+
+        bool saved = in_paragraph_;
+        in_paragraph_ = false;
+
+        bool had_content = false;
+        if (RTEST(cell_d.text)) {
+            open_paragraph();
+            emit_span(rb_str_to_std(cell_d.text), cell_rp);
+            had_content = true;
+        }
+        if (RB_TYPE_P(cell_d.children, T_ARRAY)) {
+            long len = RARRAY_LEN(cell_d.children);
+            for (long i = 0; i < len; i++) {
+                walk(RARRAY_AREF(cell_d.children, i), cell_rp);
+                had_content = true;
+            }
+        }
+        close_paragraph();
+
+        if (!had_content)
+            body_.raw("<text:p/>");
+
+        body_.close("table:table-cell");
+        in_paragraph_ = saved;
+    }
+
+    /* ── Image (ODF) ──────────────────────────────────────────── */
+
+    void odt_emit_image(const std::string &src, VALUE attrs) {
+        std::string data;
+        FILE *f = fopen(src.c_str(), "rb");
+        if (f) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+                data.append(buf, n);
+            fclose(f);
+        }
+        if (data.empty()) return;
+
+        std::string ext = "png";
+        if (src.size() > 4) {
+            std::string tail = src.substr(src.size() - 4);
+            std::transform(tail.begin(), tail.end(), tail.begin(), ::tolower);
+            if (tail == ".jpg" || tail == "jpeg") ext = "jpeg";
+        }
+
+        std::string zip_path = "Pictures/image" + std::to_string(image_id_++) + "." + ext;
+        images_.push_back({zip_path, std::move(data)});
+
+        /* Default 10cm x 7.5cm */
+        std::string width = "10cm", height = "7.5cm";
+        std::string w_str = get_attr(attrs, "width");
+        std::string h_str = get_attr(attrs, "height");
+        if (!w_str.empty()) {
+            try {
+                double px = std::stod(w_str);
+                std::ostringstream oss;
+                oss << (px / 96.0 * 2.54) << "cm";
+                width = oss.str();
+            } catch (...) {}
+        }
+        if (!h_str.empty()) {
+            try {
+                double px = std::stod(h_str);
+                std::ostringstream oss;
+                oss << (px / 96.0 * 2.54) << "cm";
+                height = oss.str();
+            } catch (...) {}
+        }
+
+        body_.open_attr("draw:frame")
+             .attr("svg:width", width).attr("svg:height", height)
+             .end_open();
+        body_.open_attr("draw:image")
+             .attr("xlink:href", zip_path)
+             .attr("xlink:type", "simple")
+             .attr("xlink:show", "embed")
+             .attr("xlink:actuate", "onLoad")
+             .self_close();
+        body_.close("draw:frame");
+    }
+
+    /* Reuse from DocxRenderer — same logic */
+    RunProps merge_run_props(const RunProps &parent, VALUE styles, const std::string &tag) {
+        RunProps rp = parent;
+        if (tag == "strong" || tag == "b") rp.bold = true;
+        if (tag == "em" || tag == "i")     rp.italic = true;
+        if (tag == "u")                    rp.underline = true;
+        if (tag == "s" || tag == "del" || tag == "strike") rp.strike = true;
+        if (tag == "code" || tag == "pre" || tag == "kbd" || tag == "samp") rp.monospace = true;
+
+        std::string fw = get_style(styles, "font-weight");
+        if (fw == "bold" || fw == "700" || fw == "800" || fw == "900") rp.bold = true;
+        std::string fs = get_style(styles, "font-style");
+        if (fs == "italic" || fs == "oblique") rp.italic = true;
+        std::string td = get_style(styles, "text-decoration");
+        if (td.find("underline") != std::string::npos) rp.underline = true;
+        if (td.find("line-through") != std::string::npos) rp.strike = true;
+
+        std::string color = get_style(styles, "color");
+        std::string hex = parse_color_to_hex6(color);
+        if (!hex.empty()) rp.color = hex;
+        std::string bg = get_style(styles, "background-color");
+        hex = parse_color_to_hex6(bg);
+        if (!hex.empty()) rp.bg_color = hex;
+
+        std::string fsize = get_style(styles, "font-size");
+        if (!fsize.empty()) {
+            int hp = css_to_half_pt(fsize);
+            if (hp > 0) rp.font_size = std::to_string(hp);
+        }
+        std::string ff = get_style(styles, "font-family");
+        if (!ff.empty()) rp.font_family = ff;
+        std::string ls = get_style(styles, "letter-spacing");
+        if (!ls.empty()) {
+            int tw = css_to_twips(ls);
+            if (tw != 0) rp.letter_spacing = std::to_string(tw);
+        }
+        return rp;
+    }
+
+    /* ── ODF boilerplate ──────────────────────────────────────── */
+
+    std::string manifest_xml() {
+        XmlWriter w;
+        w.decl();
+        w.open_attr("manifest:manifest")
+         .attr("xmlns:manifest", "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0")
+         .attr("manifest:version", "1.2")
+         .end_open();
+        w.open_attr("manifest:file-entry")
+         .attr("manifest:media-type", "application/vnd.oasis.opendocument.text")
+         .attr("manifest:full-path", "/").self_close();
+        w.open_attr("manifest:file-entry")
+         .attr("manifest:media-type", "text/xml")
+         .attr("manifest:full-path", "content.xml").self_close();
+        w.open_attr("manifest:file-entry")
+         .attr("manifest:media-type", "text/xml")
+         .attr("manifest:full-path", "styles.xml").self_close();
+        for (auto &img : images_) {
+            std::string mt = "image/png";
+            if (img.first.find(".jpeg") != std::string::npos || img.first.find(".jpg") != std::string::npos)
+                mt = "image/jpeg";
+            w.open_attr("manifest:file-entry")
+             .attr("manifest:media-type", mt)
+             .attr("manifest:full-path", img.first).self_close();
+        }
+        w.close("manifest:manifest");
+        return w.str();
+    }
+
+    std::string content_xml() {
+        XmlWriter w;
+        w.decl();
+        w.open_attr("office:document-content")
+         .attr("xmlns:office", "urn:oasis:names:tc:opendocument:xmlns:office:1.0")
+         .attr("xmlns:text", "urn:oasis:names:tc:opendocument:xmlns:text:1.0")
+         .attr("xmlns:table", "urn:oasis:names:tc:opendocument:xmlns:table:1.0")
+         .attr("xmlns:draw", "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0")
+         .attr("xmlns:fo", "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0")
+         .attr("xmlns:xlink", "http://www.w3.org/1999/xlink")
+         .attr("xmlns:style", "urn:oasis:names:tc:opendocument:xmlns:style:1.0")
+         .attr("xmlns:svg", "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0")
+         .attr("office:version", "1.2")
+         .end_open();
+
+        /* Automatic styles */
+        w.open("office:automatic-styles");
+        for (auto &as : auto_styles_) {
+            w.open_attr("style:style")
+             .attr("style:name", as.name)
+             .attr("style:family", as.family)
+             .end_open();
+
+            if (as.family == "paragraph") {
+                bool has_pp = !as.alignment.empty() || !as.margin_top.empty() ||
+                              !as.margin_bottom.empty() || !as.margin_left.empty() ||
+                              !as.margin_right.empty() || !as.line_height.empty();
+                if (has_pp) {
+                    w.open_attr("style:paragraph-properties");
+                    if (!as.alignment.empty()) w.attr("fo:text-align", as.alignment);
+                    if (!as.margin_top.empty()) w.attr("fo:margin-top", as.margin_top);
+                    if (!as.margin_bottom.empty()) w.attr("fo:margin-bottom", as.margin_bottom);
+                    if (!as.margin_left.empty()) w.attr("fo:margin-left", as.margin_left);
+                    if (!as.margin_right.empty()) w.attr("fo:margin-right", as.margin_right);
+                    if (!as.line_height.empty()) w.attr("fo:line-height", as.line_height);
+                    w.self_close();
+                }
+            }
+
+            if (as.family == "text") {
+                RunProps rp;
+                rp.bold = as.bold; rp.italic = as.italic;
+                rp.underline = as.underline; rp.strike = as.strike;
+                rp.monospace = as.monospace;
+                rp.color = as.color; rp.bg_color = as.bg_color;
+                rp.font_size = as.font_size; rp.font_family = as.font_family;
+                rp.letter_spacing = as.letter_spacing;
+                write_text_props(w, rp);
+            }
+
+            w.close("style:style");
+        }
+        w.close("office:automatic-styles");
+
+        /* Body */
+        w.open("office:body");
+        w.open("office:text");
+        w.raw(body_.str());
+        w.close("office:text");
+        w.close("office:body");
+
+        w.close("office:document-content");
+        return w.str();
+    }
+
+    std::string odt_styles_xml() {
+        XmlWriter w;
+        w.decl();
+        w.open_attr("office:document-styles")
+         .attr("xmlns:office", "urn:oasis:names:tc:opendocument:xmlns:office:1.0")
+         .attr("xmlns:style", "urn:oasis:names:tc:opendocument:xmlns:style:1.0")
+         .attr("xmlns:fo", "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0")
+         .attr("xmlns:text", "urn:oasis:names:tc:opendocument:xmlns:text:1.0")
+         .attr("office:version", "1.2")
+         .end_open();
+
+        w.open("office:styles");
+
+        /* Default paragraph style */
+        w.open_attr("style:default-style")
+         .attr("style:family", "paragraph").end_open();
+        w.open_attr("style:text-properties")
+         .attr("style:font-name", "Calibri")
+         .attr("fo:font-size", "11pt").self_close();
+        w.close("style:default-style");
+
+        /* Heading styles */
+        for (int i = 1; i <= 6; i++) {
+            std::string name = "Heading_20_" + std::to_string(i);
+            int pt_sizes[] = {0, 24, 18, 14, 12, 11, 10};
+            w.open_attr("style:style")
+             .attr("style:name", name)
+             .attr("style:family", "paragraph")
+             .attr("style:display-name", "Heading " + std::to_string(i))
+             .end_open();
+            w.open_attr("style:paragraph-properties")
+             .attr("fo:margin-top", "0.4cm").attr("fo:margin-bottom", "0.2cm").self_close();
+            w.open_attr("style:text-properties")
+             .attr("fo:font-weight", "bold")
+             .attr("fo:font-size", std::to_string(pt_sizes[i]) + "pt").self_close();
+            w.close("style:style");
+        }
+
+        /* List styles */
+        w.open_attr("text:list-style").attr("style:name", "L1").end_open();
+        for (int i = 1; i <= 4; i++) {
+            w.open_attr("text:list-level-style-bullet")
+             .attr("text:level", i)
+             .attr("text:bullet-char", i == 1 ? "\xE2\x80\xA2" : "\xE2\x97\xA6")
+             .end_open();
+            w.close("text:list-level-style-bullet");
+        }
+        w.close("text:list-style");
+
+        w.close("office:styles");
+
+        /* Page layout — automatic styles section */
+        w.open("office:automatic-styles");
+        auto twips_to_cm = [](int tw) -> std::string {
+            double cm = tw / 1440.0 * 2.54;
+            std::ostringstream oss;
+            oss << cm << "cm";
+            return oss.str();
+        };
+        w.open_attr("style:page-layout")
+         .attr("style:name", "pm1").end_open();
+        w.open_attr("style:page-layout-properties")
+         .attr("fo:page-width", twips_to_cm(page_config_.width_twips))
+         .attr("fo:page-height", twips_to_cm(page_config_.height_twips))
+         .attr("fo:margin-top", twips_to_cm(page_config_.margin_top))
+         .attr("fo:margin-bottom", twips_to_cm(page_config_.margin_bottom))
+         .attr("fo:margin-left", twips_to_cm(page_config_.margin_left))
+         .attr("fo:margin-right", twips_to_cm(page_config_.margin_right))
+         .self_close();
+        w.close("style:page-layout");
+        w.close("office:automatic-styles");
+
+        /* Master pages */
+        w.open("office:master-styles");
+        w.open_attr("style:master-page")
+         .attr("style:name", "Default")
+         .attr("style:page-layout-name", "pm1")
+         .self_close();
+        w.close("office:master-styles");
+
+        w.close("office:document-styles");
+        return w.str();
+    }
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ *  Ruby bindings
+ * ══════════════════════════════════════════════════════════════════ */
+
+static VALUE native_render_docx(int argc, VALUE *argv, VALUE mod) {
+    VALUE node, opts;
+    rb_scan_args(argc, argv, "11", &node, &opts);
     DocxRenderer renderer;
-    std::string zip_data = renderer.render(node);
+    std::string zip_data = renderer.render(node, opts);
+    return rb_enc_str_new(zip_data.data(), static_cast<long>(zip_data.size()),
+                          rb_ascii8bit_encoding());
+}
+
+static VALUE native_render_odt(int argc, VALUE *argv, VALUE mod) {
+    VALUE node, opts;
+    rb_scan_args(argc, argv, "11", &node, &opts);
+    OdtRenderer renderer;
+    std::string zip_data = renderer.render(node, opts);
     return rb_enc_str_new(zip_data.data(), static_cast<long>(zip_data.size()),
                           rb_ascii8bit_encoding());
 }
@@ -1337,5 +2252,7 @@ extern "C" void Init_fwui_docx(void) {
     VALUE mDocx = rb_define_module_under(mFWUI, "NativeDocx");
 
     rb_define_module_function(mDocx, "render_docx",
-        reinterpret_cast<VALUE (*)(...)>(native_render_docx), 1);
+        reinterpret_cast<VALUE (*)(...)>(native_render_docx), -1);
+    rb_define_module_function(mDocx, "render_odt",
+        reinterpret_cast<VALUE (*)(...)>(native_render_odt), -1);
 }

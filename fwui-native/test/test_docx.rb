@@ -107,6 +107,28 @@ module DocxTests
     test_docx_table_with_header
     test_docx_hyperlink
     test_docx_image
+    test_odt_valid_zip
+    test_odt_has_required_files
+    test_odt_paragraph
+    test_odt_headings
+    test_odt_formatting
+    test_odt_color
+    test_odt_containers
+    test_odt_br
+    test_odt_lists
+    test_odt_table
+    test_odt_hyperlink
+    test_odt_image
+    test_odt_code_pre
+    test_odt_utf8
+    test_odt_node_method
+    test_odt_native_method
+    test_docx_border
+    test_docx_colspan
+    test_docx_page_config
+    test_docx_page_a4
+    test_odt_colspan
+    test_odt_page_config
 
     summary
   end
@@ -471,6 +493,262 @@ module DocxTests
     assert("image embedded in ZIP") { img_data && img_data.bytesize == png_data.bytesize }
 
     f.unlink
+  end
+  # ── ODT helper ──────────────────────────────────────────────
+
+  def self.odt_content(odt)
+    data = zip_entry(odt, 'content.xml')
+    data&.force_encoding('UTF-8')
+  end
+
+  # ── ODT tests ──────────────────────────────────────────────
+
+  def self.test_odt_valid_zip
+    puts "  ODT: valid ZIP..."
+    odt = FWUI.p("Hello").to_odt
+    assert("binary encoding") { odt.encoding == Encoding::ASCII_8BIT }
+    assert("starts with PK") { odt[0, 2] == "PK" }
+    assert("has mimetype") { zip_entry(odt, 'mimetype') == 'application/vnd.oasis.opendocument.text' }
+  end
+
+  def self.test_odt_has_required_files
+    puts "  ODT: required files..."
+    odt = FWUI.p("Hello").to_odt
+    assert("has content.xml") { zip_entry(odt, 'content.xml') }
+    assert("has styles.xml") { zip_entry(odt, 'styles.xml') }
+    assert("has manifest.xml") { zip_entry(odt, 'META-INF/manifest.xml') }
+  end
+
+  def self.test_odt_paragraph
+    puts "  ODT: paragraph..."
+    xml = odt_content(FWUI.p("Hello world").to_odt)
+    assert("has text:p") { xml.include?('text:p') }
+    assert("has text") { xml.include?('Hello world') }
+  end
+
+  def self.test_odt_headings
+    puts "  ODT: headings..."
+    (1..6).each do |n|
+      node = FWUI.send("h#{n}", "Heading #{n}")
+      xml = odt_content(node.to_odt)
+      assert("h#{n} has text:h") { xml.include?('text:h') }
+      assert("h#{n} has outline-level=#{n}") { xml.include?("text:outline-level=\"#{n}\"") }
+      assert("h#{n} has text") { xml.include?("Heading #{n}") }
+    end
+  end
+
+  def self.test_odt_formatting
+    puts "  ODT: formatting..."
+    xml = odt_content(FWUI.p("bold").bold.to_odt)
+    assert("bold → fo:font-weight") { xml.include?('fo:font-weight="bold"') }
+
+    xml = odt_content(FWUI.p("italic").italic.to_odt)
+    assert("italic → fo:font-style") { xml.include?('fo:font-style="italic"') }
+
+    xml = odt_content(FWUI.p("underline").set_style("text-decoration", "underline").to_odt)
+    assert("underline → text-underline-style") { xml.include?('style:text-underline-style') }
+
+    xml = odt_content(FWUI.p("strike").set_style("text-decoration", "line-through").to_odt)
+    assert("strike → text-line-through-style") { xml.include?('style:text-line-through-style') }
+  end
+
+  def self.test_odt_color
+    puts "  ODT: color..."
+    xml = odt_content(FWUI.p("red").color("red").to_odt)
+    assert("color → fo:color") { xml.include?('fo:color="#FF0000"') }
+
+    xml = odt_content(FWUI.p("bg").bg_color("#FFCC00").to_odt)
+    assert("bg_color → fo:background-color") { xml.include?('fo:background-color="#FFCC00"') }
+  end
+
+  def self.test_odt_containers
+    puts "  ODT: containers..."
+    tree = FWUI.div([FWUI.section([FWUI.p("Deep")])])
+    xml = odt_content(tree.to_odt)
+    assert("container children rendered") { xml.include?('Deep') }
+  end
+
+  def self.test_odt_br
+    puts "  ODT: line break..."
+    tree = FWUI.node("p", children: [FWUI.text("a"), FWUI.br, FWUI.text("b")])
+    xml = odt_content(tree.to_odt)
+    assert("br → text:line-break") { xml.include?('text:line-break') }
+  end
+
+  def self.test_odt_lists
+    puts "  ODT: lists..."
+    tree = FWUI.ul([FWUI.li("Item 1"), FWUI.li("Item 2")])
+    xml = odt_content(tree.to_odt)
+    assert("has text:list") { xml.include?('text:list') }
+    assert("has text:list-item") { xml.include?('text:list-item') }
+    assert("has items") { xml.include?('Item 1') && xml.include?('Item 2') }
+  end
+
+  def self.test_odt_table
+    puts "  ODT: table..."
+    tree = FWUI.node("table", children: [
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "A"),
+        FWUI.node("td", text: "B"),
+      ])
+    ])
+    xml = odt_content(tree.to_odt)
+    assert("has table:table") { xml.include?('table:table') }
+    assert("has table:table-row") { xml.include?('table:table-row') }
+    assert("has table:table-cell") { xml.include?('table:table-cell') }
+    assert("has cell text") { xml.include?('A') && xml.include?('B') }
+  end
+
+  def self.test_odt_hyperlink
+    puts "  ODT: hyperlink..."
+    tree = FWUI.div([FWUI.a("Click", href: "https://example.com")])
+    xml = odt_content(tree.to_odt)
+    assert("has text:a") { xml.include?('text:a') }
+    assert("has xlink:href") { xml.include?('https://example.com') }
+    assert("has link text") { xml.include?('Click') }
+  end
+
+  def self.test_odt_image
+    puts "  ODT: image..."
+    png_data = [
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+      0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+      0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+      0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+      0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,
+      0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+      0x44, 0xAE, 0x42, 0x60, 0x82,
+    ].pack('C*')
+
+    f = Tempfile.new(['test_img', '.png'])
+    f.binmode
+    f.write(png_data)
+    f.close
+
+    tree = FWUI.img(f.path, alt: "test")
+    odt = tree.to_odt
+    xml = odt_content(odt)
+    assert("has draw:frame") { xml.include?('draw:frame') }
+    assert("has draw:image") { xml.include?('draw:image') }
+
+    img = zip_entry(odt, 'Pictures/image1.png')
+    assert("image in ZIP") { img && img.bytesize == png_data.bytesize }
+
+    f.unlink
+  end
+
+  def self.test_odt_code_pre
+    puts "  ODT: code/pre..."
+    xml = odt_content(FWUI.node("p", children: [FWUI.code("mono")]).to_odt)
+    assert("code → Courier New") { xml.include?('Courier New') }
+  end
+
+  def self.test_odt_utf8
+    puts "  ODT: UTF-8..."
+    xml = odt_content(FWUI.p("Привет 🎉").to_odt)
+    assert("cyrillic") { xml.include?('Привет') }
+    assert("emoji") { xml.include?('🎉') }
+  end
+
+  def self.test_odt_node_method
+    puts "  ODT: Node#to_odt..."
+    odt = FWUI.h1("Test").to_odt
+    assert("returns binary") { odt.is_a?(String) && odt.encoding == Encoding::ASCII_8BIT }
+    assert("is a ZIP") { odt[0, 2] == "PK" }
+  end
+
+  def self.test_odt_native_method
+    puts "  ODT: Native.to_odt..."
+    odt = FWUI::Native.to_odt(FWUI.p("test"))
+    assert("returns binary") { odt.is_a?(String) }
+    assert("is a ZIP") { odt[0, 2] == "PK" }
+  end
+  # ── Commit 4: Polish + edge cases ────────────────────────────
+
+  def self.test_docx_border
+    puts "  DOCX: border..."
+    xml = doc_xml(FWUI.p("bordered").set_style("border", "2px solid #333").to_docx)
+    assert("border → w:pBdr") { xml.include?('w:pBdr') }
+    assert("has border sides") { xml.include?('w:top') && xml.include?('w:bottom') }
+    assert("has border color") { xml.include?('333') }
+  end
+
+  def self.test_docx_colspan
+    puts "  DOCX: colspan/rowspan..."
+    tree = FWUI.node("table", children: [
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "Wide", colspan: "2"),
+      ]),
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "A"),
+        FWUI.node("td", text: "B"),
+      ]),
+    ])
+    xml = doc_xml(tree.to_docx)
+    assert("colspan → w:gridSpan") { xml.include?('w:gridSpan') }
+
+    tree2 = FWUI.node("table", children: [
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "Tall", rowspan: "2"),
+        FWUI.node("td", text: "R1"),
+      ]),
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "R2"),
+      ]),
+    ])
+    xml2 = doc_xml(tree2.to_docx)
+    assert("rowspan → w:vMerge") { xml2.include?('w:vMerge') }
+  end
+
+  def self.test_docx_page_config
+    puts "  DOCX: page config..."
+    tree = FWUI.p("Hello")
+    docx = tree.to_docx({"margin_top" => "2in", "margin_bottom" => "2in"})
+    xml = doc_xml(docx)
+    assert("has w:sectPr") { xml.include?('w:sectPr') }
+    assert("has w:pgSz") { xml.include?('w:pgSz') }
+    assert("has w:pgMar") { xml.include?('w:pgMar') }
+    # 2in = 2880 twips
+    assert("custom margin") { xml.include?('"2880"') }
+  end
+
+  def self.test_docx_page_a4
+    puts "  DOCX: A4 page size..."
+    docx = FWUI.p("A4").to_docx({"page_size" => "A4"})
+    xml = doc_xml(docx)
+    # A4 width = 11906 twips
+    assert("A4 width") { xml.include?('"11906"') }
+    assert("A4 height") { xml.include?('"16838"') }
+  end
+
+  def self.test_odt_colspan
+    puts "  ODT: colspan/rowspan..."
+    tree = FWUI.node("table", children: [
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "Wide", colspan: "3"),
+      ]),
+    ])
+    xml = odt_content(tree.to_odt)
+    assert("colspan → number-columns-spanned") { xml.include?('table:number-columns-spanned="3"') }
+
+    tree2 = FWUI.node("table", children: [
+      FWUI.node("tr", children: [
+        FWUI.node("td", text: "Tall", rowspan: "2"),
+      ]),
+    ])
+    xml2 = odt_content(tree2.to_odt)
+    assert("rowspan → number-rows-spanned") { xml2.include?('table:number-rows-spanned="2"') }
+  end
+
+  def self.test_odt_page_config
+    puts "  ODT: page config..."
+    odt = FWUI.p("A4").to_odt({"page_size" => "A4"})
+    styles = zip_entry(odt, 'styles.xml')&.force_encoding('UTF-8')
+    assert("has page-layout") { styles&.include?('style:page-layout') }
+    assert("has page-layout-properties") { styles&.include?('style:page-layout-properties') }
+    assert("has fo:page-width") { styles&.include?('fo:page-width') }
   end
 end
 
