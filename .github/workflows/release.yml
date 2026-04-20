@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  cpp:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-latest
+            platform: macos-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libfmt-dev nlohmann-json3-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fmt nlohmann-json
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Package
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          DIR="nodex-${TAG}-${{ matrix.platform }}"
+          mkdir -p "${DIR}/lib" "${DIR}/include"
+          cp build/libnodex.a "${DIR}/lib/" 2>/dev/null || true
+          cp -r include/nodex "${DIR}/include/"
+          cp -r examples "${DIR}/"
+          tar czf "${DIR}.tar.gz" "${DIR}"
+
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nodex-*.tar.gz
+
+  gem:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+
+      - name: Build gem
+        run: gem build nodex.gemspec
+
+      - name: Upload gem to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.gem"

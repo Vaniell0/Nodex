@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# FWUI CLI — static site generator and development server.
+#
+# Usage:
+#   nodex build              # Render pages/ → dist/
+#   nodex serve [--dev]      # Start development server
+#   nodex new <name>         # Create new project scaffold
+
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+require 'nodex'
+require_relative '../lib/nodex/cli'
+
+FWUI::CLI.run(ARGV)

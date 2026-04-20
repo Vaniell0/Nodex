@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cpp:
+    name: C++ (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libfmt-dev nlohmann-json3-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fmt nlohmann-json ninja
+
+      - name: Build & Test
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNodex_BUILD_TESTS=ON
+          ninja -C build
+          ctest --test-dir build --output-on-failure
+
+  ruby:
+    name: Ruby (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+
+      - name: Install
+        run: gem build nodex.gemspec && gem install nodex-*.gem
+
+      - name: HTML generation
+        run: |
+          ruby -e "
+            require 'nodex'
+            include Nodex::DSL
+            page = div { h1('Hello Nodex').bold; p 'Works on ${{ matrix.os }}' }
+            puts page.to_html
+          "
+
+      - name: DOCX generation with math
+        run: |
+          ruby -e "
+            require 'nodex'
+            include Nodex::DSL
+            doc = div {
+              h1 'Test Document'
+              math_block('x^2 + y^2 = z^2')
+              table { tr { th 'A'; th 'B' }; tr { td '1'; td '2' } }
+            }
+            doc.to_docx('/tmp/test.docx', preset: :gost)
+            puts 'DOCX OK (' + File.size('/tmp/test.docx').to_s + ' bytes)'
+          "
+
+      - name: ODT generation
+        run: |
+          ruby -e "
+            require 'nodex'
+            include Nodex::DSL
+            div { p 'ODT test' }.to_odt('/tmp/test.odt')
+            puts 'ODT OK (' + File.size('/tmp/test.odt').to_s + ' bytes)'
+          "

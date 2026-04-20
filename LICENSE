@@ -1,0 +1,80 @@
+## FWUI — Dual License
+
+This repository contains code under two licenses:
+
+| Directory | License | Description |
+|-----------|---------|-------------|
+| `ruby/` | Apache 2.0 | Ruby DSL, Registry, PageLoader, Server |
+| `include/`, `src/`, `fwui-native/` | BSL 1.1 | C++ core, renderers, C extension, baked templates, PackedBuilder |
+
+---
+
+## Apache License 2.0
+
+Applies to: `ruby/`, `static/`
+
+Copyright 2026 Vaniell0 (ripaivan11@gmail.com)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use these files except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+## Business Source License 1.1
+
+Applies to: `include/`, `src/`, `fwui-native/`, `CMakeLists.txt`
+
+**Licensed Work:**
+FWUI Native — C++ core library, renderers, C extension for optimized HTML rendering
+
+**Licensor:**
+Vaniell0 (ripaivan11@gmail.com)
+
+**Licensed Work Copyright:**
+© 2026 Vaniell0. All rights reserved.
+
+**Change Date:**
+2031-03-28
+
+**Change License:**
+Apache License, Version 2.0
+
+On the Change Date, the Licensed Work will be made available under the
+Change License (Apache 2.0), and the terms below will no longer apply.
+
+### Additional Use Grant
+
+You may use the Licensed Work **only** for:
+- Personal projects
+- Educational purposes
+- Non-commercial open source projects
+
+### Commercial License Required
+
+A separate commercial license is required for:
+- Internal company tools and systems
+- Commercial products or services offered to customers
+- SaaS, hosted, or cloud-based services where FWUI Native is a component
+- Any other commercial or organizational use
+
+For commercial licensing terms and pricing, contact:
+ripaivan11@gmail.com
+
+### Disclaimer
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE LICENSED WORK OR THE USE OR OTHER
+DEALINGS IN THE LICENSED WORK.

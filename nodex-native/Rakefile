@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+require 'rake/extensiontask'
+
+Rake::ExtensionTask.new('fwui_native') do |ext|
+  ext.lib_dir = 'lib/fwui_native'
+end
+
+desc 'Build and test'
+task default: [:compile, :test]
+
+desc 'Run tests'
+task :test do
+  ruby 'test/test_native.rb'
+end
