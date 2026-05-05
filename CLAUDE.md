@@ -17,18 +17,31 @@ nodex-ruby -e 'require "nodex"; ...'  # one-liner
 ```
 
 ## Структура
+Два гема под одной лицензией (Apache-2.0):
+
 ```
-include/nodex/          — C++20 заголовки (core, elements, decorators, registry, renderer)
-src/                    — C++ реализация (8 файлов)
-ruby/lib/nodex.rb       — Ruby DSL (Node, 50+ элементов, pipe operator, math)
-ruby/lib/nodex/
-  docx.rb               — Pure Ruby DOCX writer (OMML math, images, tables)
-  odt.rb                — Pure Ruby ODT writer
-  omml.rb               — LaTeX → OMML конвертер
-  markdown.rb           — Markdown → Node tree
-  server.rb             — HTTP сервер (middleware, session, SSE, HTMX)
-  cli.rb                — CLI: build, serve, new
-nodex-native/           — C extension для быстрого HTML-рендеринга
+nodex (core):
+  include/nodex/        — C++20 заголовки (core, elements, decorators, registry, renderer)
+  src/                  — C++ реализация (8 файлов)
+  ruby/lib/nodex.rb     — Ruby DSL (Node, 50+ элементов, pipe operator)
+  ruby/lib/nodex/
+    markdown.rb         — Markdown → Node tree
+    server.rb           — HTTP сервер (middleware, session, SSE, HTMX)
+    cli.rb              — CLI: build, serve, new
+  nodex-native/         — C extension для быстрого HTML-рендеринга
+
+nodex-office (опциональный гем, depends on nodex):
+  nodex-office/lib/nodex/office.rb       — entry point (Node#to_docx/to_odt/to_pdf)
+  nodex-office/lib/nodex/office/docx.rb  — Pure Ruby DOCX writer (OMML, images, tables)
+  nodex-office/lib/nodex/office/odt.rb   — Pure Ruby ODT writer
+  nodex-office/lib/nodex/office/omml.rb  — LaTeX → OMML конвертер
+```
+
+**Использование office writers:**
+```ruby
+require "nodex"
+require "nodex/office"     # подключает to_docx/to_odt/to_pdf
+node.to_docx("report.docx", preset: :gost)
 ```
 
 ## C++ Targets

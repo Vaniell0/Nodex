@@ -374,12 +374,17 @@ module Nodex
 
       # Emit table — 100% width, autofit columns to content
       @body << '<w:tbl><w:tblPr>'
+      @body << '<w:tblW w:w="5000" w:type="pct"/>'
       @body << '<w:tblBorders>'
       %w[w:top w:left w:bottom w:right w:insideH w:insideV].each do |bt|
         @body << "<#{bt} w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
       end
-      @body << '<w:tblW w:w="5000" w:type="pct"/>'
+      @body << '</w:tblBorders>'
       @body << '</w:tblPr>'
+      # OOXML requires <w:tblGrid> with <w:gridCol> per column.
+      @body << '<w:tblGrid>'
+      max_cols.times { @body << '<w:gridCol/>' }
+      @body << '</w:tblGrid>'
 
       rows.each_with_index do |cells, r|
         @body << '<w:tr>'

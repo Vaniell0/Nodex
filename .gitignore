@@ -21,6 +21,8 @@ nodex-native/ext/nodex_native/vendor/
 ruby/lib/nodex/native/*/
 !ruby/lib/nodex/native/.gitkeep
 
+!nodex-office/
+
 !data/
 !static/
 !templates/
@@ -29,6 +31,7 @@ ruby/lib/nodex/native/*/
 !examples/
 
 !nodex.gemspec
+!nodex-office.gemspec
 !Rakefile
 !README.md
 !LICENSE

@@ -20,9 +20,6 @@ require_relative 'nodex/mime'
 require_relative 'nodex/template'
 require_relative 'nodex/server'
 require_relative 'nodex/session'
-require_relative 'nodex/docx'
-require_relative 'nodex/omml'
-require_relative 'nodex/odt'
 
 module Nodex
   # HTML void elements (self-closing, no end tag)
@@ -188,52 +185,8 @@ module Nodex
 
     def to_json(indent: 2) = JSON.pretty_generate(to_hash, indent: ' ' * indent)
 
-    # Render to DOCX (pure Ruby, zero deps).
-    #
-    #   docx = node.to_docx(preset: :gost)
-    #   File.binwrite("report.docx", docx)
-    def to_docx(output_path = nil, preset: nil, **opts)
-      data = Nodex::DocxWriter.render(self, preset: preset, **opts)
-      output_path ? File.binwrite(output_path, data) : data
-    end
-
-    # Render to ODT (pure Ruby, zero deps).
-    #
-    #   odt = node.to_odt(preset: :gost)
-    #   File.binwrite("report.odt", odt)
-    def to_odt(output_path = nil, preset: nil, **opts)
-      data = Nodex::OdtWriter.render(self, preset: preset, **opts)
-      output_path ? File.binwrite(output_path, data) : data
-    end
-
-    # Render to PDF via DOCX → LibreOffice conversion.
-    # Requires `soffice` (LibreOffice) in PATH.
-    #
-    #   node.to_pdf("report.pdf", preset: :academic)
-    def to_pdf(output_path = nil, preset: nil, **opts)
-      require 'tempfile'
-      require 'fileutils'
-
-      docx_data = to_docx(preset: preset, **opts)
-      tmp = Tempfile.new(['nodex', '.docx'])
-      tmp.binmode
-      tmp.write(docx_data)
-      tmp.close
-
-      tmp_dir = Dir.mktmpdir('nodex-pdf')
-      result = system('soffice', '--headless', '--convert-to', 'pdf',
-                       '--outdir', tmp_dir, tmp.path,
-                       out: File::NULL, err: File::NULL)
-      raise "soffice not found or conversion failed (is LibreOffice installed?)" unless result
-
-      pdf_path = File.join(tmp_dir, File.basename(tmp.path, '.docx') + '.pdf')
-      pdf_data = File.binread(pdf_path)
-
-      FileUtils.rm_rf(tmp_dir)
-      tmp.unlink
-
-      output_path ? File.binwrite(output_path, pdf_data) : pdf_data
-    end
+    # `to_docx`, `to_odt`, `to_pdf` are provided by the `nodex-office` gem
+    # (`require 'nodex/office'`). Without it, calls raise NoMethodError.
 
     def to_hash
       # Handle special Ruby-only node types for C++ compatibility
